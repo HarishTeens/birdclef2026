@@ -1,0 +1,20 @@
+# Python deps for the BirdCLEF+ 2026 baseline.
+# Tested on Python 3.12. (3.13/3.14 may work but PyTorch lags new Python releases.)
+#
+# Install with:
+#   python3.12 -m venv .venv && source .venv/bin/activate
+#   pip install -r requirements.txt
+
+torch>=2.4
+torchaudio>=2.4
+timm>=1.0
+librosa>=0.10
+soundfile>=0.12
+numpy>=1.26
+pandas>=2.2
+scikit-learn>=1.4
+tqdm>=4.66
+scipy>=1.13
+matplotlib>=3.8
+jupyterlab>=4.0
+ipywidgets>=8.0
