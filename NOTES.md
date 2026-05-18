@@ -1,4 +1,4 @@
-The mental model to keep
+### The mental model to keep
 
   1. Audio → picture (mel spectrogram).
   2. Picture → fingerprint (Perch, or a CNN that learned to mimic Perch).
