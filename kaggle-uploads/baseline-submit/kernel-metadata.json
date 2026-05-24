@@ -9,7 +9,8 @@
   "enable_tpu": false,
   "enable_internet": false,
   "dataset_sources": [
-    "harishteens/birdclef-2026-baseline-ckpt"
+    "harishteens/birdclef-2026-baseline-ckpt",
+    "tuckerarrants/perch-v2-no-dft-onnx"
   ],
   "competition_sources": [
     "birdclef-2026"

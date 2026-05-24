@@ -15,9 +15,10 @@ Top score to beat: **0.963**. The leaderboard is brutally compressed — top 30%
 | 0 | Baseline pipeline | 0.50 → 0.71 | ✅ shipped, LB **0.714** |
 | 1 | Distribution alignment | 0.78-0.85 | ✅ shipped, LB **0.772** (soundscape val 0.882 — gap 0.11) |
 | 2a | SpecAugment + REPLICAS=4 | 0.80-0.83 | ❌ regressed, LB **0.757** (-0.015 from Phase 1, see lessons below) |
-| 2b | Background mixing (clip + soundscape ambience) | 0.79-0.83 | ❌ regressed, LB **0.696** (epoch-1 ckpt; mixing introduced label noise — see lessons) |
-| 2c-e | SpecAugment isolated / energy trimming / mixup / TTA | TBD | ⏸ deferred (Phase 2 augmentation experiments not paying off — pivoting to Phase 3) |
-| 3 | Perch v2 foundation model | 0.85-0.89 | ⏳ planned |
+| 2b | Background mixing (clip + soundscape ambience) | 0.79-0.83 | ❌ regressed, LB **0.696** (epoch-1 ckpt; mixing introduced label noise) |
+| 2c-e | SpecAugment isolated / energy trimming / mixup / TTA | TBD | ⏸ deferred (augmentation not paying off — Perch is the better lever) |
+| 3 | Perch v2 foundation model | 0.85-0.89 | ✅ shipped, LB **0.836** (+0.064 from Phase 1; val/LB gap *shrank* from 0.110 to 0.092 — Perch generalizes better) |
+| 3.5 | Head tweaks (LR sched / arch / mixup / ensemble) | 0.85-0.87 | ✅ shipped, LB **0.833** (-0.003, within noise — val gain was below noise floor) |
 | 4 | Sound Event Detection (SED) head | 0.88-0.92 | ⏳ planned |
 | 5 | Iterative refinement (pseudo-labeling) | 0.89-0.92 | ⏳ planned |
 | 6 | K-fold ensemble | 0.91-0.94 | ⏳ planned |
@@ -97,9 +98,49 @@ Goal: synthesize training examples that combine clean species signal (clips) wit
 
 ---
 
-## Phase 3 — Perch v2 foundation model ⏳ (next)
+## Phase 3 — Perch v2 foundation model ✅
 
-Skipping ahead of remaining Phase 2 augmentation experiments. Augmentation isn't paying off on this dataset; Perch is the next big data-side lever.
+**Result**: LB **0.836** (+0.064 from Phase 1, our prior best).
+
+Approach: precompute Perch v2 embeddings (1536-d) for every clip + every labeled soundscape window once. Train a small MLP head (LayerNorm + Linear 1536→512 + ReLU + Linear 512→234) on top of frozen embeddings.
+
+**Lessons from Phase 3**:
+- Each epoch now takes **~1-3 seconds** (vs ~25 minutes in Phase 0-2). ~1,000× speedup. This unlocks fast iteration.
+- val/LB gap *shrank* from 0.110 to 0.092 — Perch's foundation-model generalization helps across recording sessions. Theoretical prediction confirmed empirically.
+- Best epoch was 12/30; training got noisier after that. Adding a cosine LR schedule would let us train longer cleanly.
+- Same/diff species cosine similarity in raw Perch embeddings: 0.255 vs 0.112 — Perch encodes species patterns out of the box.
+
+**Setup files**:
+- `embeddings/clip_embeddings.npy` (218 MB) + `clip_index.csv`
+- `embeddings/ss_window_embeddings.npy` (9 MB) + `ss_window_index.csv`
+- `checkpoints/model_v5.pt` (head weights only, 3.4 MB)
+- Kaggle inference: bundle Perch ONNX wheel + use `tuckerarrants/perch-v2-no-dft-onnx`
+
+---
+
+## Phase 3.5 — Head refinements 🟡 (in progress)
+
+Goal: squeeze the most out of Perch embeddings before moving to harder phases. Each
+experiment is <5 min wall-clock thanks to cached embeddings, so we run them one at a
+time, controlled, and learn from each.
+
+### Experiment results (Phase 3 baseline = `ss_val_auc 0.9276`)
+
+| # | Change | best val | Δ vs base | LB | Verdict |
+|---|---|---|---|---|---|
+| 1 | Cosine LR schedule (5e-4 → 1e-6) | 0.9193 | −0.008 | not shipped | ❌ Peak came earlier *and* lower. Smaller late steps locked the model into a worse local optimum, not a better one. **Concluded**: Phase 3's late-epoch noise was the model running out of signal, not optimizer overshoot. Save-best logic already handled it. |
+| 2 | Linear head only (`LayerNorm + Linear(1536→234)`) | 0.9200 | −0.008 | not shipped | ❌ as a regression but ✅ as a **diagnostic** — Perch features are essentially linearly separable. The MLP's small edge (~0.008) may be noise. **Concluded**: capacity isn't the limiter, Perch is doing 99% of the work. Skip Experiment 3 (larger head). |
+| 3 | Larger head (`hidden_dim=1024`) | — | — | — | ⏸ skipped — Exp 2 told us capacity isn't the bottleneck |
+| 4 | Embedding mixup (Beta(0.4, 0.4), p=0.5) | **0.9358** | **+0.008** | pending | ✅ Helped. Peak hit earlier (ep 8 vs 12) AND held longer (multi-epoch plateau above 0.93). Classic regularization signature. |
+| 5 | 5-seed ensemble of Exp 4 heads | — | — | pending | ⏳ Next. Reliable +0.01-0.02 from diversity. |
+
+### Lessons compounded
+
+- **Mixup works because it's a different *kind* of intervention** than what we tried before. SpecAugment / background mixing were aimed at making the *input* harder; mixup makes the *label* softer (interpolated). On rich pretrained features, label smoothing via mixup is a near-free regularizer.
+- **Linear probe results matter more than you'd think.** Confirming Perch features are linearly separable changes the strategy: we stop investing in head architecture and double down on Perch-side improvements (Phase 4 SED features, Phase 5 pseudo-labeling).
+- **Phase 3.5 ensemble shipped at LB 0.833 (−0.003 vs Phase 3's 0.836).** Local val went +0.005, LB went −0.003. Both moves are within the val noise floor (~±0.005 per-seed std on our 19-file val). **The biggest lesson: don't optimize past your val noise floor.** Future phases need to target >0.02 val improvements to be detectable above noise. Phases that gave real LB gains (Phase 1 +0.058, Phase 3 +0.064) all involved *data* changes; head tweaks compound less. **Strategy going forward: prioritize data-side interventions (Phase 5 pseudo-labels, Phase 4 SED features).**
+
+---
 
 
 
