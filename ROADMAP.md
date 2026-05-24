@@ -20,7 +20,7 @@ Top score to beat: **0.963**. The leaderboard is brutally compressed — top 30%
 | 3 | Perch v2 foundation model | 0.85-0.89 | ✅ shipped, LB **0.836** (+0.064 from Phase 1; val/LB gap *shrank* from 0.110 to 0.092 — Perch generalizes better) |
 | 3.5 | Head tweaks (LR sched / arch / mixup / ensemble) | 0.85-0.87 | ✅ shipped, LB **0.833** (-0.003, within noise — val gain was below noise floor) |
 | 4 | Sound Event Detection (SED) head | 0.88-0.92 | ⏳ planned |
-| 5 | Iterative refinement (pseudo-labeling) | 0.89-0.92 | ⏳ planned |
+| 5 | Iterative refinement (pseudo-labeling) | 0.89-0.92 | ❌ 3 attempts, all within ±0.01 of Phase 3.5. Pseudo-labels from the Phase 3.5 ensemble don't carry new info. Closed. |
 | 6 | K-fold ensemble | 0.91-0.94 | ⏳ planned |
 | 7 | Calibration & post-processing | +0.005-0.02 | ⏳ planned |
 | 8 | Novel edge / lottery tickets | wildcard | ⏳ open-ended |
@@ -281,9 +281,71 @@ clip logits (234,)
 
 ---
 
-## Phase 5 — Iterative refinement (pseudo-labeling) ⏳
+## Phase 5 — Iterative refinement (pseudo-labeling) ❌ (1st attempt)
 
-Goal: use the model to clean its own training data and to label the unlabeled soundscapes.
+Goal: use the Phase 3.5 ensemble to pseudo-label the ~10,500 unlabeled soundscape files, then train on the much larger dataset.
+
+**1st attempt result**: Phase 5 ensemble ss_val_auc = **0.9243** vs Phase 3.5's 0.9329. Δ = **−0.0086** — clearly worse than noise floor. Not submitted.
+
+### Pseudo-label diagnostic (threshold 0.75)
+
+- 127,104 unlabeled SS windows embedded with Perch ✓
+- 42.5% of windows got ≥1 positive ✓ (sweet spot)
+- **Species coverage was severely skewed** ❌:
+  - 122/206 species got 0 pseudo-labels
+  - Top 3 species (65380, 22973, 555146) accounted for ~50% of all positives
+  - Top 10 species accounted for ~90% of all positives
+
+### What went wrong
+
+With pseudo-labels at 73% of training data and 90% of positives concentrated in 10 species, the model spent its capacity on those few species and *lost ground* on the rare ones. Mean per-seed val dropped from Phase 3.5's 0.9278 → Phase 5's 0.9169.
+
+The ensemble lift worked normally (+0.0074 over mean individual), but it couldn't compensate for a fundamentally biased training mix.
+
+### Lessons + recovery options
+
+**Lesson**: pseudo-labeling at a fixed threshold (0.75) reflects the *prior model's* biases. The Phase 3.5 ensemble is already confident on common species and uncertain on rare ones, so naive pseudo-labels reinforce that. We need to *correct* for the bias, not just propagate it.
+
+Recovery options to try (lowest effort first):
+1. **Lower threshold (0.5 or 0.6)** to capture more rare-species pseudo-labels. Risk: more noise.
+2. **Per-species threshold calibration**: pick a per-species threshold that gives each species at least K positive labels in the pool. Restores coverage.
+3. **Downsample pseudo-labels**: take only ~30k pseudo windows per epoch instead of 127k. Restores Phase 3.5-style mix where pseudo is supplement, not bulk.
+4. **Soft pseudo-labels**: use raw probabilities (continuous values) instead of hard thresholding. Preserves uncertainty.
+5. **Move to Phase 4 (SED with Perch spatial_embedding)** as a different lever entirely — sometimes a wrong approach is the wrong approach.
+
+Best next attempt is probably **(3) downsample pseudo + retry**, since it preserves the working Phase 3.5 mix while adding some target-distribution signal. ~30 min to retest.
+
+### 2nd attempt: downsampled to 20k pseudo windows
+
+**Result**: ensemble val = **0.9333** vs Phase 3.5's 0.9329 — Δ = **+0.0004**, statistically zero.
+
+The downsample fixed the regression (mean per-seed went from 0.9169 → 0.9284, back to Phase 3.5 levels) but didn't extract any *new* signal. Not submitted.
+
+**Updated lesson**: pseudo-labels at threshold 0.75 are information-redundant with what Phase 3.5 already knows. The model's confident-prediction set ≈ the pseudo-label set ≈ the species it was already going to classify well. To extract new info from unlabeled soundscapes, we'd need either:
+- Lower threshold (gets more diverse but noisier labels)
+- Per-species calibration (forces broader coverage)
+- A different model class doing the labeling (Phase 4 SED would have spatial-temporal info that Phase 3.5's clip-level head doesn't capture)
+- Or accept that pseudo-labeling isn't the right lever for this dataset and move to Phase 4 (SED) or Phase 8 (SSL).
+
+### 3rd attempt: lower threshold (0.5) + downsample (20k)
+
+Hypothesis: lower threshold → broader species coverage → more diverse pseudo-label signal.
+
+**Result**: ensemble val = **0.9343** vs Phase 3.5's 0.9329 — Δ = **+0.0014**, within noise. Not submitted.
+
+Coverage did improve: species with 0 pseudo-labels dropped from 122 → 98 (+24 species). But the top-10 dominance pattern was unchanged (still 91% of all positives concentrated there). The 24 newly-covered species each got <10 pseudo-labels — not enough new signal to move the needle.
+
+### Phase 5 conclusion (closed)
+
+Three attempts, all flat or worse. The pattern:
+
+| Attempt | Pseudo size | Threshold | Ensemble val | Δ vs Phase 3.5 |
+|---|---|---|---|---|
+| 1 | 127k (full) | 0.75 | 0.9243 | −0.0086 ❌ |
+| 2 | 20k (downsample) | 0.75 | 0.9333 | +0.0004 ⚠ |
+| 3 | 20k (downsample) | 0.50 | 0.9343 | +0.0014 ⚠ |
+
+**Pseudo-labeling from Phase 3.5 doesn't extract new information.** This is consistent with the broader pattern in our results — phases that worked (1, 3) brought new audio distributions or new model classes; phases that didn't (2a, 2b, 3.5, 5) rearranged or augmented existing information. For the next phase we need a *new* information source. The best candidate is Perch's `spatial_embedding` output, which we haven't used yet (Phase 4).
 
 ### 5a. Within-clip refinement
 1. Use the current best model.
