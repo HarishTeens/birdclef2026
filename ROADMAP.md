@@ -19,7 +19,7 @@ Top score to beat: **0.963**. The leaderboard is brutally compressed — top 30%
 | 2c-e | SpecAugment isolated / energy trimming / mixup / TTA | TBD | ⏸ deferred (augmentation not paying off — Perch is the better lever) |
 | 3 | Perch v2 foundation model | 0.85-0.89 | ✅ shipped, LB **0.836** (+0.064 from Phase 1; val/LB gap *shrank* from 0.110 to 0.092 — Perch generalizes better) |
 | 3.5 | Head tweaks (LR sched / arch / mixup / ensemble) | 0.85-0.87 | ✅ shipped, LB **0.833** (-0.003, within noise — val gain was below noise floor) |
-| 4 | Sound Event Detection (SED) head | 0.88-0.92 | ⏳ planned |
+| 4 | Sound Event Detection (SED) head | 0.88-0.92 | 🟡 shipped, awaiting LB (val 0.9401, +0.0072 above Phase 3.5 — first non-noise architectural win since Phase 3) |
 | 5 | Iterative refinement (pseudo-labeling) | 0.89-0.92 | ❌ 3 attempts, all within ±0.01 of Phase 3.5. Pseudo-labels from the Phase 3.5 ensemble don't carry new info. Closed. |
 | 6 | K-fold ensemble | 0.91-0.94 | ⏳ planned |
 | 7 | Calibration & post-processing | +0.005-0.02 | ⏳ planned |
@@ -246,9 +246,19 @@ Goal: stop training feature extraction from scratch. Use Google's Perch v2 (a tr
 
 ---
 
-## Phase 4 — Sound Event Detection (SED) head ⏳
+## Phase 4 — Sound Event Detection (SED) head 🟡 shipped, awaiting LB
 
-Goal: stop predicting one logit per clip; predict one logit per *time frame* and use attention to pool them. The model learns where in the clip the call is, without us telling it.
+Goal: use Perch's per-timestep features (its `spatial_embedding` output) instead of the pooled `embedding` output. Add an attention head that learns which timesteps matter for each species.
+
+**Implementation**: Re-extract Perch outputs to get `spatial_embedding (B, 16, 4, 1536)` for clips + labeled soundscapes. Mean-pool over the freq dimension → `(B, 16, 1536)`. SED head: LayerNorm + bottleneck Linear → two 1×1 Conv1d's (att + cla) → `clip_logits = sum(softmax(tanh(att)) * cla, dim=time)`.
+
+**Result** (5-seed ensemble):
+- Per-seed bests: 0.9410 / 0.9416 / 0.9347 / 0.9234 / 0.9234 (std 0.0080 — wider than Phase 3.5's 0.0045)
+- Mean individual:  0.9328
+- Ensemble val_auc: **0.9401**  Δ vs Phase 3.5 ensemble: **+0.0072**
+- This is 1.6× our noise std — the first non-noise architectural win since Phase 3.
+
+LB pending. Expected: 0.84-0.86 range (central estimate ~0.848 if val/LB gap holds at Phase 3's 0.092).
 
 ### Architecture (1st-place 2025-inspired, used by the EoS notebook)
 ```
