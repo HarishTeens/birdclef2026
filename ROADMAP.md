@@ -2,23 +2,29 @@
 
 The plan for taking the model from a working baseline toward a medal. Each phase has a status, the moves it contains, and an expected score range. Phases are layered: each one *adds* to the previous, doesn't replace it.
 
-Top score to beat: **0.963**. Realistic target: **bronze/silver medal (top 5-10%)**, i.e. ~0.93+. Beating top is a stretch goal that requires either flawless execution of every phase or a novel idea.
+Top score to beat: **0.963**. The leaderboard is brutally compressed — top 30% sits at 0.946+, top 5% sits at 0.949+ (yes, the top is *that* tight). Realistic target: **bronze/silver medal (top 5-10%)**, requires **~0.94+**. Beating top requires either flawless execution of every phase + a novel idea, or major luck.
+
+**Current standing**: LB 0.772 ⇒ rank ~3115 / 3826 (top 81.4%). The gap to medal territory is meaningful (~0.17 LB) but each phase below has been calibrated to that target.
 
 ---
 
 ## Status at a glance
 
-| Phase | Description | LB target | Status |
+| Phase | Description | Realistic LB target | Status |
 |---|---|---|---|
-| 0 | Baseline pipeline | 0.50 → 0.71 | ✅ shipped, LB 0.714 |
-| 1 | Distribution alignment | 0.78-0.85 | 🟡 training, soundscape val 0.882 at epoch 3 |
-| 2 | Augmentation & cleaning | 0.83-0.88 | ⏳ planned |
-| 3 | Perch v2 foundation model | 0.88-0.92 | ⏳ planned |
-| 4 | Sound Event Detection (SED) head | 0.90-0.93 | ⏳ planned |
-| 5 | Iterative refinement (pseudo-labeling) | 0.91-0.94 | ⏳ planned |
-| 6 | K-fold ensemble | 0.93-0.95 | ⏳ planned |
+| 0 | Baseline pipeline | 0.50 → 0.71 | ✅ shipped, LB **0.714** |
+| 1 | Distribution alignment | 0.78-0.85 | ✅ shipped, LB **0.772** (soundscape val 0.882 — gap 0.11) |
+| 2a | SpecAugment + REPLICAS=4 | 0.80-0.83 | ❌ regressed, LB **0.757** (-0.015 from Phase 1, see lessons below) |
+| 2b | Background mixing (clip + soundscape ambience) | 0.79-0.83 | ❌ regressed, LB **0.696** (epoch-1 ckpt; mixing introduced label noise — see lessons) |
+| 2c-e | SpecAugment isolated / energy trimming / mixup / TTA | TBD | ⏸ deferred (Phase 2 augmentation experiments not paying off — pivoting to Phase 3) |
+| 3 | Perch v2 foundation model | 0.85-0.89 | ⏳ planned |
+| 4 | Sound Event Detection (SED) head | 0.88-0.92 | ⏳ planned |
+| 5 | Iterative refinement (pseudo-labeling) | 0.89-0.92 | ⏳ planned |
+| 6 | K-fold ensemble | 0.91-0.94 | ⏳ planned |
 | 7 | Calibration & post-processing | +0.005-0.02 | ⏳ planned |
 | 8 | Novel edge / lottery tickets | wildcard | ⏳ open-ended |
+
+LB targets revised downward after Phase 1 — the val/LB gap turned out to be ~0.11 (not ~0.03 as in Phase 0), so my earlier estimates were rosy. Bronze medal (top ~10%) requires ~0.94+, which means we need Phases 2-6 to all land near the top of their ranges and stack reasonably well.
 
 Update this table after each phase ships.
 
@@ -39,9 +45,63 @@ Goal: working end-to-end submission. Everything below this depends on it.
 
 ---
 
-## Phase 1 — Distribution alignment 🟡
+## Phase 1 — Distribution alignment ✅
 
 Goal: make the training distribution look more like the test distribution. This is where 80% of the early-stage gains come from.
+
+**Shipped**: LB **0.772** (+0.058 over Phase 0). Soundscape val_auc 0.882 at epoch 3 (kernel crashed before later epochs but the "save best" logic preserved the peak).
+
+**Lessons learned**:
+- The +0.058 LB gain was real and meaningful, but ~42% of the val gain. Local val (0.882) overstates the model's true LB by ~0.11.
+- Cause **revised after Phase 2a**: it's NOT primarily memorization. The 20-file val is too small and too closely related to the 46-file train portion to be a faithful LB proxy. Improvements on this val don't necessarily generalize to the *different* recording sessions in `test_soundscapes/`.
+
+---
+
+## Phase 2a — SpecAugment + REPLICAS=4 ❌
+
+Goal: close the val/LB gap by reducing memorization of specific train soundscape files. Combined SpecAugment (regularization) + reducing soundscape replicas from 10 → 4.
+
+**Result**: regressed. LB 0.757 (−0.015 from Phase 1). Local soundscape val 0.9057 (+0.023 over Phase 1's 0.8824 baseline-on-this-val). Gap *widened* to 0.149.
+
+**What went wrong**:
+- Two changes bundled into one experiment — couldn't attribute success/failure.
+- The REPLICAS reduction was likely the culprit: with 10 replicas, the model saw ~10,000 soundscape examples per epoch. With 4 replicas, only ~4,000. The model spent more capacity on the (less test-like) clip data and less on the soundscape data that matches the test distribution. Net: less exposure to target distribution.
+- SpecAugment alone is probably fine — its effect was confounded by REPLICAS.
+
+**Lessons compounded with Phase 1's**:
+- **The 20-file ss_val_loader is not a faithful LB proxy.** It measures generalization across files in `train_soundscapes/`, not generalization from train to test (which are different recording sessions). Treat local val as a sanity check, not an optimization target.
+- **Don't bundle changes.** Test one variable at a time when LB is the only ground truth.
+- **More exposure to target-distribution data > less, even at the cost of some memorization.** Until we have a way to add target-distribution data without trade-offs (Phase 2b's background mixing, Phase 5's pseudo-labeling), keep `SOUNDSCAPE_REPLICAS = 10`.
+
+---
+
+## Phase 2b — Background mixing ❌
+
+Goal: synthesize training examples that combine clean species signal (clips) with realistic test ambience (soundscapes). Implements the "clips for species, soundscapes for ambience" idea.
+
+**Result**: regressed. LB **0.696** (-0.076 from Phase 1, -0.018 from raw Phase 0). Only trained 1 epoch (val diverged after epoch 1, so we shipped the peak checkpoint).
+
+**What went wrong**:
+- **Label noise from the "background" pool.** Pre-cached 256 random 5s segments from unlabeled soundscape files. Critical mistake: *unlabeled doesn't mean silent*. Those segments very likely contained unlabeled bird calls. Mixing them into a clip labeled species X teaches: "audio with X + Y calls → species X (and definitely not Y)." The model learns *anti-correlations* between species → catastrophic for multi-label.
+- **Too-aggressive α range** (0.3-0.8). At α=0.8 the background is 80% as loud as the call. Calls partially drowned.
+- **Under-trained**. Only 1 epoch (vs Phase 1 needing 3). The training environment also misbehaved (epoch 2 took 3 hours instead of 25 min — likely sleep/throttle), which compounded uncertainty.
+
+**Lesson — the broader pattern**:
+- **Phase 1 (data change) gained +0.058 LB. Both Phase 2 attempts (augmentation changes) lost LB.**
+- For our setup, *more / better training data* > *clever augmentation of existing data*. The big lever we haven't pulled yet is **Perch v2** — a foundation model trained on millions of bird recordings. That's the right next move.
+
+**To rescue background mixing later** (if we want to come back to it):
+- Filter the background pool to *low-energy* segments (likely silence) before caching. Removes the label-noise issue.
+- Drop α to ~0.1-0.3 (background is a quiet acoustic stain, not a competing signal).
+- Make mixing probability smaller (~0.25) so the model still sees many clean clips.
+
+---
+
+## Phase 3 — Perch v2 foundation model ⏳ (next)
+
+Skipping ahead of remaining Phase 2 augmentation experiments. Augmentation isn't paying off on this dataset; Perch is the next big data-side lever.
+
+
 
 ### 1a. Soundscape-based validation
 - Switched val set from held-out clips to held-out `train_soundscapes_labels.csv` windows.
