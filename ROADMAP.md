@@ -4,7 +4,7 @@ The plan for taking the model from a working baseline toward a medal. Each phase
 
 Top score to beat: **0.963**. The leaderboard is brutally compressed — top 30% sits at 0.946+, top 5% sits at 0.949+ (yes, the top is *that* tight). Realistic target: **bronze/silver medal (top 5-10%)**, requires **~0.94+**. Beating top requires either flawless execution of every phase + a novel idea, or major luck.
 
-**Current standing**: LB 0.772 ⇒ rank ~3115 / 3826 (top 81.4%). The gap to medal territory is meaningful (~0.17 LB) but each phase below has been calibrated to that target.
+**Current standing**: LB-best is **0.842** (combined 10-model ensemble = 5 seeds + 5 K-folds). Stacking two different diversity sources gave +0.003 over either alone (0.839 → 0.842). Total trajectory: 0.497 → 0.714 (P0) → 0.772 (P1) → 0.836 (P3) → 0.839 (P4) → 0.842 (combined).
 
 ---
 
@@ -19,9 +19,11 @@ Top score to beat: **0.963**. The leaderboard is brutally compressed — top 30%
 | 2c-e | SpecAugment isolated / energy trimming / mixup / TTA | TBD | ⏸ deferred (augmentation not paying off — Perch is the better lever) |
 | 3 | Perch v2 foundation model | 0.85-0.89 | ✅ shipped, LB **0.836** (+0.064 from Phase 1; val/LB gap *shrank* from 0.110 to 0.092 — Perch generalizes better) |
 | 3.5 | Head tweaks (LR sched / arch / mixup / ensemble) | 0.85-0.87 | ✅ shipped, LB **0.833** (-0.003, within noise — val gain was below noise floor) |
-| 4 | Sound Event Detection (SED) head | 0.88-0.92 | 🟡 shipped, awaiting LB (val 0.9401, +0.0072 above Phase 3.5 — first non-noise architectural win since Phase 3) |
+| 4 | Sound Event Detection (SED) head | 0.88-0.92 | ✅ shipped, LB **0.839** (new best, +0.003 vs Phase 3; val 0.9401, gap 0.101). Skipped variants — moving to K-fold for diversity gain. |
 | 5 | Iterative refinement (pseudo-labeling) | 0.89-0.92 | ❌ 3 attempts, all within ±0.01 of Phase 3.5. Pseudo-labels from the Phase 3.5 ensemble don't carry new info. Closed. |
-| 6 | K-fold ensemble | 0.91-0.94 | ⏳ planned |
+| 6 | K-fold ensemble | 0.91-0.94 | ✅ shipped, LB **0.839** (tied with Phase 4 SED — same diversity gain, different source) |
+| 6b | Combined ensemble (5 seeds + 5 folds = 10 models) | TBD | ✅ shipped, LB **0.842** (new best, +0.003 over Phase 4/K-fold's 0.839) |
+| 4-variant | GeMFreq pooling over freq dim | TBD | ❌ ensemble val 0.9397 (≈ Phase 4's 0.9401). Learned p ≈ 3 across seeds — mean pool was approximately optimal. Not shipped. |
 | 7 | Calibration & post-processing | +0.005-0.02 | ⏳ planned |
 | 8 | Novel edge / lottery tickets | wildcard | ⏳ open-ended |
 
